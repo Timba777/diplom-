@@ -1,0 +1,144 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        Int       @id @default(autoincrement())
+  email     String    @unique
+  password  String
+  name      String
+  createdAt DateTime  @default(now())
+
+  familyMemberships FamilyMember[]
+  operations        Operation[]
+  invitedMembers    FamilyMember[] @relation("InvitedMembers")
+  categories        Category[]
+  budgetLimits      BudgetLimit[]
+}
+
+model FamilyGroup {
+  id          Int            @id @default(autoincrement())
+  name        String
+  description String?
+  createdAt   DateTime       @default(now())
+
+  members     FamilyMember[]
+  categories  Category[]
+  limits      Limit[]
+  budgetLimits BudgetLimit[]
+  operations  Operation[]
+}
+
+enum FamilyRole {
+  OWNER
+  MEMBER
+  VIEWER
+}
+
+model FamilyMember {
+  id           Int         @id @default(autoincrement())
+  userId       Int
+  familyId     Int
+  role         FamilyRole  @default(MEMBER)
+  invitedById  Int?
+  createdAt    DateTime    @default(now())
+
+  user         User        @relation(fields: [userId], references: [id])
+  family       FamilyGroup @relation(fields: [familyId], references: [id])
+  invitedBy    User?       @relation("InvitedMembers", fields: [invitedById], references: [id])
+
+  @@unique([familyId, userId])
+}
+
+enum OperationType {
+  INCOME
+  EXPENSE
+}
+
+enum LimitPeriod {
+  WEEKLY
+  MONTHLY
+}
+
+enum LimitScope {
+  TOTAL
+  CATEGORY
+}
+
+model BudgetLimit {
+  id         Int         @id @default(autoincrement())
+  name       String
+  amount     Decimal
+  period     LimitPeriod
+  scope      LimitScope
+  isBlocking Boolean     @default(false)
+  createdAt  DateTime    @default(now())
+
+  categoryId Int?
+  userId     Int?
+  familyId   Int?
+
+  category   Category?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  user       User?        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  family     FamilyGroup? @relation(fields: [familyId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([categoryId])
+}
+
+model Category {
+  id          Int           @id @default(autoincrement())
+  name        String
+  type        OperationType
+  color       String?
+  icon        String?
+  userId      Int
+  familyId    Int?
+  isDefault   Boolean       @default(false)
+  createdAt   DateTime      @default(now())
+
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  family      FamilyGroup?  @relation(fields: [familyId], references: [id])
+  operations  Operation[]
+  limits      Limit[]
+  budgetLimits BudgetLimit[]
+
+  @@unique([userId, name])
+}
+
+model Operation {
+  id          Int            @id @default(autoincrement())
+  amount      Decimal
+  type        OperationType
+  description String?
+  date        DateTime       @default(now())
+  planned     Boolean        @default(false)
+
+  userId      Int
+  familyId    Int?
+  categoryId  Int?
+
+  user        User           @relation(fields: [userId], references: [id])
+  family      FamilyGroup?   @relation(fields: [familyId], references: [id])
+  category    Category?      @relation(fields: [categoryId], references: [id])
+}
+
+model Limit {
+  id             Int            @id @default(autoincrement())
+  familyId       Int
+  categoryId     Int?
+  maxAmount      Decimal
+  periodStart    DateTime
+  periodEnd      DateTime
+  blockUnplanned Boolean        @default(false)
+  createdAt      DateTime       @default(now())
+
+  family         FamilyGroup    @relation(fields: [familyId], references: [id])
+  category       Category?      @relation(fields: [categoryId], references: [id])
+}
