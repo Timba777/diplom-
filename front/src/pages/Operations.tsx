@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   getOperations,
   createOperation,
+  deleteOperation,
   getCategories,
   getFamilies,
   ApiError,
@@ -32,7 +33,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Plus, AlertTriangle, ShieldAlert } from "lucide-react";
+import { Plus, AlertTriangle, ShieldAlert, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -99,6 +100,17 @@ export default function OperationsPage() {
   };
 
   useEffect(loadData, []);
+
+  const handleDeleteOperation = async (id: string | number) => {
+    if (!confirm("Удалить операцию?")) return;
+    try {
+      await deleteOperation(id);
+      toast.success("Операция удалена");
+      loadData();
+    } catch (e: unknown) {
+      toast.error(getErrorMessage(e));
+    }
+  };
 
   const filtered =
     filterType === "ALL"
@@ -400,13 +412,14 @@ export default function OperationsPage() {
                   <th className="text-center p-3 font-medium text-muted-foreground">
                     Стат.
                   </th>
+                  <th className="p-3 w-[52px]" aria-label="Действия" />
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={7}
                       className="text-center py-8 text-muted-foreground"
                     >
                       Нет операций
@@ -464,6 +477,18 @@ export default function OperationsPage() {
                             Семья
                           </Badge>
                         )}
+                      </td>
+                      <td className="p-3">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => handleDeleteOperation(op.id)}
+                          aria-label="Удалить операцию"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
                       </td>
                     </tr>
                   ))

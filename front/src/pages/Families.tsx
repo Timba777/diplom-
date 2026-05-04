@@ -6,9 +6,11 @@ import {
   addFamilyMember,
   updateFamilyMember,
   removeFamilyMember,
+  deleteFamily,
+  getErrorMessage,
   type Family,
-  type FamilyMember,
 } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -38,6 +40,7 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 export default function FamiliesPage() {
+  const { user } = useAuth();
   const [families, setFamilies] = useState<Family[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
@@ -119,6 +122,24 @@ export default function FamiliesPage() {
     }
   };
 
+  const isOwner =
+    !!selectedFamily?.members?.some(
+      (m) => String(m.userId) === String(user?.id) && m.role === "OWNER",
+    );
+
+  const handleDeleteFamily = async () => {
+    if (!selectedFamily) return;
+    if (!confirm("Удалить семью?")) return;
+    try {
+      await deleteFamily(selectedFamily.id);
+      toast.success("Семья удалена");
+      setSelectedFamily(null);
+      load();
+    } catch (err: unknown) {
+      toast.error(getErrorMessage(err));
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -174,7 +195,23 @@ export default function FamiliesPage() {
           {selectedFamily ? (
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-base">{selectedFamily.name}</CardTitle>
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <CardTitle className="text-base">{selectedFamily.name}</CardTitle>
+                  {isOwner && (
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteFamily();
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4 mr-1" />
+                      Удалить семью
+                    </Button>
+                  )}
+                </div>
               </CardHeader>
               <CardContent className="space-y-4">
                 {/* Add member */}

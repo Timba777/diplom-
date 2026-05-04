@@ -214,3 +214,40 @@ exports.familiesRouter.delete("/:id/members/:memberId", async (req, res) => {
     await prisma_1.prisma.familyMember.delete({ where: { id: memberToDelete.id } });
     return res.status(204).send();
 });
+exports.familiesRouter.delete("/:id", async (req, res) => {
+    const familyId = parseId(req.params.id);
+    if (!familyId)
+        return res.status(400).json({ message: "Invalid id" });
+    const ownerCheck = await requireOwner(familyId, req.user.id);
+    if (!ownerCheck.ok) {
+        return res.status(ownerCheck.status).json({ message: "Forbidden" });
+    }
+    const existing = await prisma_1.prisma.familyGroup.findUnique({
+        where: { id: familyId },
+    });
+    if (!existing)
+        return res.status(404).json({ message: "Not found" });
+    try {
+        await prisma_1.prisma.$transaction(async (tx) => {
+            await tx.limit.deleteMany({ where: { familyId } });
+            await tx.budgetLimit.deleteMany({ where: { familyId } });
+            await tx.operation.updateMany({
+                where: { familyId },
+                data: { familyId: null },
+            });
+            await tx.category.updateMany({
+                where: { familyId },
+                data: { familyId: null },
+            });
+            await tx.familyMember.deleteMany({ where: { familyId } });
+            await tx.familyGroup.delete({ where: { id: familyId } });
+        });
+        return res.json({ success: true });
+    }
+    catch (e) {
+        console.error(e);
+        return res.status(500).json({
+            message: e instanceof Error ? e.message : "Failed to delete family",
+        });
+    }
+});

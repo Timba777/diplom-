@@ -235,3 +235,31 @@ exports.operationsRouter.get("/", async (req, res) => {
     });
     return res.json(operations);
 });
+function parseOperationId(value) {
+    const n = typeof value === "string" ? Number(value) : Number(value);
+    if (!Number.isInteger(n) || n <= 0)
+        return null;
+    return n;
+}
+exports.operationsRouter.delete("/:id", async (req, res) => {
+    const id = parseOperationId(req.params.id);
+    if (!id)
+        return res.status(400).json({ message: "Invalid id" });
+    try {
+        const existing = await prisma_1.prisma.operation.findUnique({ where: { id } });
+        if (!existing) {
+            return res.status(404).json({ message: "Not found" });
+        }
+        if (existing.userId !== req.user.id) {
+            return res.status(403).json({ message: "Forbidden" });
+        }
+        await prisma_1.prisma.operation.delete({ where: { id } });
+        return res.json({ success: true });
+    }
+    catch (e) {
+        console.error(e);
+        return res.status(500).json({
+            message: e instanceof Error ? e.message : "Failed to delete operation",
+        });
+    }
+});

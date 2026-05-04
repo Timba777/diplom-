@@ -280,3 +280,31 @@ operationsRouter.get("/", async (req: AuthRequest, res) => {
   return res.json(operations);
 });
 
+function parseOperationId(value: unknown): number | null {
+  const n = typeof value === "string" ? Number(value) : Number(value);
+  if (!Number.isInteger(n) || n <= 0) return null;
+  return n;
+}
+
+operationsRouter.delete("/:id", async (req: AuthRequest, res) => {
+  const id = parseOperationId(req.params.id);
+  if (!id) return res.status(400).json({ message: "Invalid id" });
+
+  try {
+    const existing = await prisma.operation.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ message: "Not found" });
+    }
+    if (existing.userId !== req.user!.id) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+    await prisma.operation.delete({ where: { id } });
+    return res.json({ success: true });
+  } catch (e: unknown) {
+    console.error(e);
+    return res.status(500).json({
+      message: e instanceof Error ? e.message : "Failed to delete operation",
+    });
+  }
+});
+

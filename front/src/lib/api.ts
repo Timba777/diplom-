@@ -386,7 +386,13 @@ export async function createOperation(
   return data as CreateOperationResponse;
 }
 
-// Backend не реализует DELETE /operations/:id
+export async function deleteOperation(
+  id: Id,
+): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(`/operations/${id}`, {
+    method: "DELETE",
+  });
+}
 
 // ---- Categories ---------------------------------------------
 
@@ -480,6 +486,12 @@ export async function removeFamilyMember(
   memberId: Id,
 ): Promise<void> {
   await request<void>(`/families/${familyId}/members/${memberId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function deleteFamily(id: Id): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(`/families/${id}`, {
     method: "DELETE",
   });
 }
