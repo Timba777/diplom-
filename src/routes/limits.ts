@@ -3,6 +3,16 @@ import { prisma } from "../prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
 import { LimitPeriod, LimitScope } from "../../generated/prisma/enums";
 import { Prisma } from "../../generated/prisma/client";
+import { resolveCategoryForLimit } from "./categories";
+import {
+  canManageBudgetLimit,
+  isFamilyOwner,
+  limitScope,
+} from "../lib/familyAccess";
+import {
+  calculateLimitUsage,
+  decimalToNumber,
+} from "../lib/limitUsage";
 
 export const limitsRouter = Router();
 
@@ -47,20 +57,59 @@ function parseAmount(value: unknown): Prisma.Decimal | null {
   return null;
 }
 
-async function isFamilyOwner(familyId: number, userId: number): Promise<boolean> {
-  const member = await prisma.familyMember.findFirst({
-    where: { familyId, userId },
-    select: { role: true },
-  });
-  return member?.role === "OWNER";
-}
-
 async function hasFamilyAccess(familyId: number, userId: number): Promise<boolean> {
   const member = await prisma.familyMember.findFirst({
     where: { familyId, userId },
     select: { id: true },
   });
   return !!member;
+}
+
+type LimitRow = {
+  id: number;
+  name: string;
+  amount: Prisma.Decimal;
+  period: LimitPeriod;
+  scope: LimitScope;
+  isBlocking: boolean;
+  createdAt: Date;
+  categoryId: number | null;
+  userId: number | null;
+  familyId: number | null;
+  category?: { id: number; name: string } | null;
+  family?: { id: number; name: string } | null;
+};
+
+async function serializeLimit(
+  limit: LimitRow,
+  userId: number,
+  options?: { includeUsage?: boolean },
+) {
+  const scope = limitScope(limit.userId, limit.familyId);
+  const base = {
+    id: limit.id,
+    name: limit.name,
+    amount: decimalToNumber(limit.amount),
+    period: limit.period,
+    scope: limit.scope,
+    isBlocking: limit.isBlocking,
+    createdAt: limit.createdAt,
+    categoryId: limit.categoryId,
+    userId: limit.userId,
+    familyId: limit.familyId,
+    category: limit.category ?? null,
+    family: limit.family ?? null,
+    limitScope: scope,
+    familyName: limit.family?.name ?? null,
+    canManage: await canManageBudgetLimit(limit, userId),
+  };
+
+  if (options?.includeUsage === false) {
+    return base;
+  }
+
+  const usage = await calculateLimitUsage(limit);
+  return { ...base, ...usage };
 }
 
 limitsRouter.post("/", async (req: AuthRequest, res) => {
@@ -120,22 +169,14 @@ limitsRouter.post("/", async (req: AuthRequest, res) => {
     return res.status(400).json({ message: "categoryId must be null for TOTAL scope" });
   }
 
-  // Validate category ownership and family compatibility if category is used.
   if (parsedCategoryId) {
-    const category = await prisma.category.findFirst({
-      where: { id: parsedCategoryId, userId: req.user!.id },
-      select: { id: true, familyId: true },
-    });
-    if (!category) return res.status(404).json({ message: "Category not found" });
-
-    if (belongsToFamily) {
-      if (category.familyId !== belongsToFamily) {
-        return res.status(400).json({ message: "Category must belong to the same family" });
-      }
-    } else {
-      if (category.familyId !== null) {
-        return res.status(400).json({ message: "Personal limit requires personal category" });
-      }
+    const resolved = await resolveCategoryForLimit(
+      parsedCategoryId,
+      req.user!.id,
+      belongsToFamily,
+    );
+    if (!resolved.ok) {
+      return res.status(resolved.status).json({ message: resolved.message });
     }
   }
 
@@ -150,9 +191,13 @@ limitsRouter.post("/", async (req: AuthRequest, res) => {
       userId: belongsToUser,
       familyId: belongsToFamily,
     },
+    include: {
+      category: { select: { id: true, name: true } },
+      family: { select: { id: true, name: true } },
+    },
   });
 
-  return res.status(201).json(created);
+  return res.status(201).json(await serializeLimit(created, req.user!.id));
 });
 
 limitsRouter.get("/", async (req: AuthRequest, res) => {
@@ -176,7 +221,11 @@ limitsRouter.get("/", async (req: AuthRequest, res) => {
     },
   });
 
-  return res.json(limits);
+  const result = await Promise.all(
+    limits.map((l) => serializeLimit(l, req.user!.id, { includeUsage: true })),
+  );
+
+  return res.json(result);
 });
 
 limitsRouter.get("/:id", async (req: AuthRequest, res) => {
@@ -202,7 +251,9 @@ limitsRouter.get("/:id", async (req: AuthRequest, res) => {
     return res.status(403).json({ message: "Forbidden" });
   }
 
-  return res.json(limit);
+  return res.json(
+    await serializeLimit(limit, req.user!.id, { includeUsage: true }),
+  );
 });
 
 limitsRouter.put("/:id", async (req: AuthRequest, res) => {
@@ -258,22 +309,14 @@ limitsRouter.put("/:id", async (req: AuthRequest, res) => {
     return res.status(400).json({ message: "categoryId must be null for TOTAL scope" });
   }
 
-  // Validate category if used
   if (nextCategoryId) {
-    const category = await prisma.category.findFirst({
-      where: { id: nextCategoryId, userId: req.user!.id },
-      select: { familyId: true },
-    });
-    if (!category) return res.status(404).json({ message: "Category not found" });
-
-    if (existing.familyId) {
-      if (category.familyId !== existing.familyId) {
-        return res.status(400).json({ message: "Category must belong to the same family" });
-      }
-    } else {
-      if (category.familyId !== null) {
-        return res.status(400).json({ message: "Personal limit requires personal category" });
-      }
+    const resolved = await resolveCategoryForLimit(
+      nextCategoryId,
+      req.user!.id,
+      existing.familyId,
+    );
+    if (!resolved.ok) {
+      return res.status(resolved.status).json({ message: resolved.message });
     }
   }
 
@@ -287,9 +330,13 @@ limitsRouter.put("/:id", async (req: AuthRequest, res) => {
       categoryId: nextCategoryId,
       isBlocking: isBlocking === undefined ? existing.isBlocking : !!isBlocking,
     },
+    include: {
+      category: { select: { id: true, name: true } },
+      family: { select: { id: true, name: true } },
+    },
   });
 
-  return res.json(updated);
+  return res.json(await serializeLimit(updated, req.user!.id));
 });
 
 limitsRouter.delete("/:id", async (req: AuthRequest, res) => {

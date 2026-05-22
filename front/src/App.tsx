@@ -14,6 +14,7 @@ import CategoriesPage from "./pages/Categories";
 import FamiliesPage from "./pages/Families";
 import LimitsPage from "./pages/Limits";
 import AnalyticsPage from "./pages/Analytics";
+import GoalsPage from "./pages/Goals";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -40,6 +41,7 @@ const App = () => (
               <Route path="/categories" element={<CategoriesPage />} />
               <Route path="/families" element={<FamiliesPage />} />
               <Route path="/limits" element={<LimitsPage />} />
+              <Route path="/goals" element={<GoalsPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />
             </Route>
             <Route path="*" element={<NotFound />} />

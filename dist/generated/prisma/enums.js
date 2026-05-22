@@ -9,7 +9,7 @@
 * 🟢 You can import this file directly.
 */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.LimitScope = exports.LimitPeriod = exports.OperationType = exports.FamilyRole = void 0;
+exports.GoalContributionType = exports.GoalStatus = exports.LimitScope = exports.LimitPeriod = exports.OperationType = exports.FamilyRole = void 0;
 exports.FamilyRole = {
     OWNER: 'OWNER',
     MEMBER: 'MEMBER',
@@ -26,4 +26,13 @@ exports.LimitPeriod = {
 exports.LimitScope = {
     TOTAL: 'TOTAL',
     CATEGORY: 'CATEGORY'
+};
+exports.GoalStatus = {
+    ACTIVE: 'ACTIVE',
+    COMPLETED: 'COMPLETED',
+    PAUSED: 'PAUSED'
+};
+exports.GoalContributionType = {
+    ADD: 'ADD',
+    REMOVE: 'REMOVE'
 };

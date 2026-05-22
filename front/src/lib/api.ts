@@ -195,12 +195,20 @@ export interface Operation {
   family?: Family;
 }
 
+export type CategoryScope = "PERSONAL" | "FAMILY";
+export type LimitOwnership = "PERSONAL" | "FAMILY";
+
 export interface Category {
   id: Id;
   name: string;
   type: "INCOME" | "EXPENSE";
   color?: string | null;
   icon?: string | null;
+  userId?: number;
+  familyId?: number | null;
+  familyName?: string | null;
+  scope: CategoryScope;
+  canManage: boolean;
 }
 
 export interface Family {
@@ -229,6 +237,14 @@ export interface BudgetLimit {
   userId?: number | null;
   familyId?: number | null;
   createdAt?: string;
+  limitScope: LimitOwnership;
+  familyName?: string | null;
+  canManage: boolean;
+  usedAmount?: number;
+  remainingAmount?: number;
+  percentUsed?: number;
+  isExceeded?: boolean;
+  exceededBy?: number;
   category?: { id: number; name: string };
   family?: { id: number; name: string };
 }
@@ -405,11 +421,21 @@ export async function createCategory(payload: {
   type: "INCOME" | "EXPENSE";
   color?: string;
   icon?: string;
-  familyId?: number;
+  /** Личная категория — не передавать familyId. Семейная — id семьи. */
+  familyId?: number | null;
 }): Promise<Category> {
+  const body: Record<string, unknown> = {
+    name: payload.name,
+    type: payload.type,
+    color: payload.color,
+    icon: payload.icon,
+  };
+  if (payload.familyId != null && payload.familyId !== 0) {
+    body.familyId = payload.familyId;
+  }
   return request<Category>("/categories", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
 }
 
@@ -630,4 +656,122 @@ export async function getFamilyAnalytics(
       dateTo: params?.dateTo,
     })}`,
   );
+}
+
+// ---- Financial goals ----------------------------------------
+
+export type GoalStatus = "ACTIVE" | "COMPLETED" | "PAUSED";
+export type GoalContributionType = "ADD" | "REMOVE";
+export type GoalScope = "PERSONAL" | "FAMILY";
+
+export interface FinancialGoal {
+  id: Id;
+  title: string;
+  description?: string | null;
+  targetAmount: number;
+  currentAmount: number;
+  deadline?: string | null;
+  status: GoalStatus;
+  userId?: number | null;
+  familyId?: number | null;
+  createdById: number;
+  createdAt?: string;
+  updatedAt?: string;
+  scope: GoalScope;
+  familyName?: string | null;
+  remainingAmount: number;
+  progressPercent: number;
+  isCompleted: boolean;
+  canManage: boolean;
+  canContribute: boolean;
+  createdBy?: { id: number; name: string; email: string };
+}
+
+export interface GoalContribution {
+  id: Id;
+  goalId: Id;
+  userId: Id;
+  amount: number;
+  type: GoalContributionType;
+  comment?: string | null;
+  createdAt: string;
+  user?: { id: number; name: string; email: string };
+}
+
+export interface CreateGoalPayload {
+  title: string;
+  description?: string;
+  targetAmount: number | string;
+  deadline?: string | null;
+  familyId?: number | null;
+}
+
+export interface UpdateGoalPayload {
+  title?: string;
+  description?: string | null;
+  targetAmount?: number | string;
+  deadline?: string | null;
+  status?: GoalStatus;
+}
+
+export interface CreateGoalContributionPayload {
+  amount: number | string;
+  type?: GoalContributionType;
+  comment?: string;
+}
+
+export async function getGoals(): Promise<FinancialGoal[]> {
+  return request<FinancialGoal[]>("/goals");
+}
+
+export async function getGoal(id: Id): Promise<FinancialGoal> {
+  return request<FinancialGoal>(`/goals/${id}`);
+}
+
+export async function createGoal(
+  payload: CreateGoalPayload,
+): Promise<FinancialGoal> {
+  const body: Record<string, unknown> = {
+    title: payload.title,
+    targetAmount: payload.targetAmount,
+    description: payload.description,
+    deadline: payload.deadline,
+  };
+  if (payload.familyId != null && payload.familyId !== 0) {
+    body.familyId = payload.familyId;
+  }
+  return request<FinancialGoal>("/goals", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateGoal(
+  id: Id,
+  payload: UpdateGoalPayload,
+): Promise<FinancialGoal> {
+  return request<FinancialGoal>(`/goals/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteGoal(id: Id): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(`/goals/${id}`, { method: "DELETE" });
+}
+
+export async function addGoalContribution(
+  goalId: Id,
+  payload: CreateGoalContributionPayload,
+): Promise<{ contribution: GoalContribution; goal: FinancialGoal }> {
+  return request<{ contribution: GoalContribution; goal: FinancialGoal }>(
+    `/goals/${goalId}/contributions`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export async function getGoalContributions(
+  goalId: Id,
+): Promise<GoalContribution[]> {
+  return request<GoalContribution[]>(`/goals/${goalId}/contributions`);
 }

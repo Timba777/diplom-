@@ -7,14 +7,17 @@ import {
   ArrowLeftRight,
   ShoppingCart,
   Gauge,
+  Target,
 } from "lucide-react";
 import {
   getAnalyticsSummary,
   getOperations,
   getLimits,
+  getGoals,
   type AnalyticsSummary,
   type Operation,
   type BudgetLimit,
+  type FinancialGoal,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Link } from "react-router-dom";
@@ -36,6 +39,7 @@ export default function DashboardPage() {
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
   const [recentOps, setRecentOps] = useState<Operation[]>([]);
   const [limits, setLimits] = useState<BudgetLimit[]>([]);
+  const [goals, setGoals] = useState<FinancialGoal[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -43,13 +47,23 @@ export default function DashboardPage() {
       getAnalyticsSummary(),
       getOperations(),
       getLimits(),
-    ]).then(([s, o, l]) => {
+      getGoals(),
+    ]).then(([s, o, l, g]) => {
       if (s.status === "fulfilled") setSummary(s.value);
       if (o.status === "fulfilled") setRecentOps(o.value.slice(0, 5));
       if (l.status === "fulfilled") setLimits(l.value);
+      if (g.status === "fulfilled") setGoals(g.value);
       setLoading(false);
     });
   }, []);
+
+  const activeGoals = goals.filter((g) => g.status === "ACTIVE");
+  const nearestGoal = [...activeGoals]
+    .filter((g) => g.deadline)
+    .sort(
+      (a, b) =>
+        new Date(a.deadline!).getTime() - new Date(b.deadline!).getTime(),
+    )[0];
 
   if (loading) {
     return (
@@ -133,7 +147,71 @@ export default function DashboardPage() {
         </p>
       )}
 
-      <div className="grid lg:grid-cols-2 gap-6">
+      <div className="grid lg:grid-cols-3 gap-6">
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Target className="h-4 w-4 text-muted-foreground" />
+              Финансовые цели
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 p-4 pt-0">
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Активных целей</span>
+              <span className="font-mono-nums font-semibold">
+                {activeGoals.length}
+              </span>
+            </div>
+            {nearestGoal ? (
+              <div className="rounded-lg border p-3 space-y-2">
+                <p className="text-sm font-medium truncate">
+                  {nearestGoal.title}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Дедлайн:{" "}
+                  {new Date(nearestGoal.deadline!).toLocaleDateString("ru-RU")}
+                </p>
+                <div className="flex justify-between text-xs">
+                  <span>
+                    {fmt(nearestGoal.currentAmount)} /{" "}
+                    {fmt(nearestGoal.targetAmount)} ₽
+                  </span>
+                  <span className="font-medium">
+                    {Math.round(nearestGoal.progressPercent)}%
+                  </span>
+                </div>
+                <div className="budget-bar">
+                  <div
+                    className="budget-bar-fill"
+                    style={{
+                      width: `${Math.min(nearestGoal.progressPercent, 100)}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground text-center py-2">
+                {activeGoals.length === 0 ? (
+                  <>
+                    Целей нет.{" "}
+                    <Link to="/goals" className="text-primary hover:underline">
+                      Создать
+                    </Link>
+                  </>
+                ) : (
+                  "Нет целей с дедлайном"
+                )}
+              </p>
+            )}
+            <Link
+              to="/goals"
+              className="text-xs text-primary hover:underline block text-center"
+            >
+              Все цели →
+            </Link>
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Последние операции</CardTitle>

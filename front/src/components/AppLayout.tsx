@@ -5,6 +5,7 @@ import {
   Tag,
   Users,
   Gauge,
+  Target,
   BarChart3,
   LogOut,
   Menu,
@@ -21,6 +22,7 @@ const links = [
   { to: "/categories", label: "Категории", icon: Tag },
   { to: "/families", label: "Семьи", icon: Users },
   { to: "/limits", label: "Лимиты", icon: Gauge },
+  { to: "/goals", label: "Цели", icon: Target },
   { to: "/analytics", label: "Аналитика", icon: BarChart3 },
 ];
 

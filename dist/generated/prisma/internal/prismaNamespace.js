@@ -48,7 +48,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.defineExtension = exports.NullsOrder = exports.QueryMode = exports.SortOrder = exports.LimitScalarFieldEnum = exports.OperationScalarFieldEnum = exports.CategoryScalarFieldEnum = exports.BudgetLimitScalarFieldEnum = exports.FamilyMemberScalarFieldEnum = exports.FamilyGroupScalarFieldEnum = exports.UserScalarFieldEnum = exports.TransactionIsolationLevel = exports.ModelName = exports.AnyNull = exports.JsonNull = exports.DbNull = exports.NullTypes = exports.prismaVersion = exports.getExtensionContext = exports.Decimal = exports.Sql = exports.raw = exports.join = exports.empty = exports.sql = exports.PrismaClientValidationError = exports.PrismaClientInitializationError = exports.PrismaClientRustPanicError = exports.PrismaClientUnknownRequestError = exports.PrismaClientKnownRequestError = void 0;
+exports.defineExtension = exports.NullsOrder = exports.QueryMode = exports.SortOrder = exports.GoalContributionScalarFieldEnum = exports.FinancialGoalScalarFieldEnum = exports.LimitScalarFieldEnum = exports.OperationScalarFieldEnum = exports.CategoryScalarFieldEnum = exports.BudgetLimitScalarFieldEnum = exports.FamilyMemberScalarFieldEnum = exports.FamilyGroupScalarFieldEnum = exports.UserScalarFieldEnum = exports.TransactionIsolationLevel = exports.ModelName = exports.AnyNull = exports.JsonNull = exports.DbNull = exports.NullTypes = exports.prismaVersion = exports.getExtensionContext = exports.Decimal = exports.Sql = exports.raw = exports.join = exports.empty = exports.sql = exports.PrismaClientValidationError = exports.PrismaClientInitializationError = exports.PrismaClientRustPanicError = exports.PrismaClientUnknownRequestError = exports.PrismaClientKnownRequestError = void 0;
 const runtime = __importStar(require("@prisma/client/runtime/client"));
 /**
  * Prisma Errors
@@ -109,7 +109,9 @@ exports.ModelName = {
     BudgetLimit: 'BudgetLimit',
     Category: 'Category',
     Operation: 'Operation',
-    Limit: 'Limit'
+    Limit: 'Limit',
+    FinancialGoal: 'FinancialGoal',
+    GoalContribution: 'GoalContribution'
 };
 /**
  * Enums
@@ -183,6 +185,29 @@ exports.LimitScalarFieldEnum = {
     periodStart: 'periodStart',
     periodEnd: 'periodEnd',
     blockUnplanned: 'blockUnplanned',
+    createdAt: 'createdAt'
+};
+exports.FinancialGoalScalarFieldEnum = {
+    id: 'id',
+    title: 'title',
+    description: 'description',
+    targetAmount: 'targetAmount',
+    currentAmount: 'currentAmount',
+    deadline: 'deadline',
+    status: 'status',
+    userId: 'userId',
+    familyId: 'familyId',
+    createdById: 'createdById',
+    createdAt: 'createdAt',
+    updatedAt: 'updatedAt'
+};
+exports.GoalContributionScalarFieldEnum = {
+    id: 'id',
+    goalId: 'goalId',
+    userId: 'userId',
+    amount: 'amount',
+    type: 'type',
+    comment: 'comment',
     createdAt: 'createdAt'
 };
 exports.SortOrder = {

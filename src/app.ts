@@ -8,6 +8,7 @@ import { categoriesRouter } from "./routes/categories";
 import { familiesRouter } from "./routes/families";
 import { analyticsRouter } from "./routes/analytics";
 import { limitsRouter } from "./routes/limits";
+import { goalsRouter } from "./routes/goals";
 
 dotenv.config();
 
@@ -22,4 +23,5 @@ app.use("/categories", categoriesRouter);
 app.use("/families", familiesRouter);
 app.use("/limits", limitsRouter);
 app.use("/analytics", analyticsRouter);
+app.use("/goals", goalsRouter);
 

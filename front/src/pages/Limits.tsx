@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   getLimits,
   createLimit,
@@ -6,11 +6,13 @@ import {
   deleteLimit,
   getCategories,
   getFamilies,
+  getFamily,
   getErrorMessage,
   type BudgetLimit,
   type Category,
   type Family,
 } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -31,8 +33,9 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Pencil, Trash2, ShieldAlert, Gauge } from "lucide-react";
+import { Plus, Pencil, Trash2, ShieldAlert, Gauge, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 
 const NONE_FAMILY = "__personal__";
 const CAT_NONE = "__none_cat__";
@@ -55,6 +58,7 @@ interface LimitForm {
   amount: number;
   period: "WEEKLY" | "MONTHLY";
   scope: "TOTAL" | "CATEGORY";
+  limitKind: "PERSONAL" | "FAMILY";
   isBlocking: boolean;
   categoryId: string;
   familyId: string;
@@ -65,15 +69,18 @@ const emptyForm: LimitForm = {
   amount: 0,
   period: "MONTHLY",
   scope: "TOTAL",
+  limitKind: "PERSONAL",
   isBlocking: false,
   categoryId: CAT_NONE,
   familyId: NONE_FAMILY,
 };
 
 export default function LimitsPage() {
+  const { user } = useAuth();
   const [limits, setLimits] = useState<BudgetLimit[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [families, setFamilies] = useState<Family[]>([]);
+  const [ownerFamilies, setOwnerFamilies] = useState<Family[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<BudgetLimit | null>(null);
@@ -92,6 +99,50 @@ export default function LimitsPage() {
 
   useEffect(load, []);
 
+  useEffect(() => {
+    if (!user || families.length === 0) {
+      setOwnerFamilies([]);
+      return;
+    }
+    Promise.all(
+      families.map((f) =>
+        getFamily(f.id)
+          .then((full) => full)
+          .catch(() => null),
+      ),
+    ).then((fullList) => {
+      const owned = fullList.filter(
+        (f): f is Family =>
+          f != null &&
+          f.members?.some(
+            (m) =>
+              String(m.userId) === String(user.id) && m.role === "OWNER",
+          ),
+      );
+      setOwnerFamilies(owned);
+    });
+  }, [families, user]);
+
+  const limitCategories = useMemo(() => {
+    const isPersonal = form.limitKind === "PERSONAL";
+    return categories.filter((c) => {
+      if (c.type !== "EXPENSE") return false;
+      if (isPersonal) return c.scope === "PERSONAL";
+      if (form.familyId === NONE_FAMILY) return false;
+      return (
+        c.scope === "FAMILY" && String(c.familyId) === String(form.familyId)
+      );
+    });
+  }, [categories, form.limitKind, form.familyId]);
+
+  useEffect(() => {
+    if (form.categoryId === CAT_NONE) return;
+    const ok = limitCategories.some(
+      (c) => String(c.id) === String(form.categoryId),
+    );
+    if (!ok) setForm((p) => ({ ...p, categoryId: CAT_NONE }));
+  }, [limitCategories, form.categoryId]);
+
   const openCreate = () => {
     setEditing(null);
     setForm(emptyForm);
@@ -105,6 +156,7 @@ export default function LimitsPage() {
       amount: toNum(l.amount),
       period: l.period,
       scope: l.scope,
+      limitKind: l.limitScope,
       isBlocking: l.isBlocking,
       categoryId:
         l.categoryId != null ? String(l.categoryId) : CAT_NONE,
@@ -123,13 +175,17 @@ export default function LimitsPage() {
         toast.error("Выберите категорию");
         return;
       }
+      if (form.limitKind === "FAMILY" && form.familyId === NONE_FAMILY) {
+        toast.error("Выберите семью для семейного лимита");
+        return;
+      }
 
       const categoryIdNum =
         form.scope === "CATEGORY" && form.categoryId !== CAT_NONE
           ? Number(form.categoryId)
           : null;
       const familyIdResolved =
-        form.familyId && form.familyId !== NONE_FAMILY
+        form.limitKind === "FAMILY" && form.familyId !== NONE_FAMILY
           ? Number(form.familyId)
           : null;
 
@@ -156,7 +212,6 @@ export default function LimitsPage() {
           scope: payload.scope,
           isBlocking: payload.isBlocking,
           categoryId: payload.categoryId,
-          familyId: payload.familyId,
         });
         toast.success("Лимит обновлён");
       } else {
@@ -179,12 +234,13 @@ export default function LimitsPage() {
   };
 
   const handleDelete = async (id: string | number) => {
+    if (!confirm("Удалить лимит?")) return;
     try {
       await deleteLimit(id);
       setLimits((prev) => prev.filter((l) => String(l.id) !== String(id)));
       toast.success("Лимит удалён");
-    } catch {
-      toast.error("Не удалось удалить");
+    } catch (err: unknown) {
+      toast.error(getErrorMessage(err));
     }
   };
 
@@ -212,6 +268,68 @@ export default function LimitsPage() {
               </DialogTitle>
             </DialogHeader>
             <form onSubmit={handleSubmit} className="space-y-4">
+              {!editing && (
+                <div className="space-y-1.5">
+                  <Label>Тип лимита</Label>
+                  <Select
+                    value={form.limitKind}
+                    onValueChange={(v: "PERSONAL" | "FAMILY") =>
+                      setForm((p) => ({
+                        ...p,
+                        limitKind: v,
+                        familyId: NONE_FAMILY,
+                        categoryId: CAT_NONE,
+                      }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="PERSONAL">Личный</SelectItem>
+                      <SelectItem value="FAMILY">Семейный</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              {editing && (
+                <p className="text-xs text-muted-foreground">
+                  Тип: {editing.limitScope === "PERSONAL" ? "личный" : "семейный"}
+                  {editing.familyName ? ` · ${editing.familyName}` : ""}
+                </p>
+              )}
+              {form.limitKind === "FAMILY" && !editing && (
+                <div className="space-y-1.5">
+                  <Label>Семья</Label>
+                  <Select
+                    value={form.familyId}
+                    onValueChange={(v) =>
+                      setForm((p) => ({
+                        ...p,
+                        familyId: v,
+                        categoryId: CAT_NONE,
+                      }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Выберите семью" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ownerFamilies.length === 0 ? (
+                        <SelectItem value={NONE_FAMILY} disabled>
+                          Нет семей, где вы владелец
+                        </SelectItem>
+                      ) : (
+                        ownerFamilies.map((f) => (
+                          <SelectItem key={f.id} value={String(f.id)}>
+                            {f.name}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div className="space-y-1.5">
                 <Label>Название</Label>
                 <Input
@@ -290,41 +408,16 @@ export default function LimitsPage() {
                         <SelectValue placeholder="Выбрать" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value={CAT_NONE}>
-                          Не выбрано
-                        </SelectItem>
-                        {categories
-                          .filter((c) => c.type === "EXPENSE")
-                          .map((c) => (
-                            <SelectItem key={c.id} value={String(c.id)}>
-                              {c.name}
-                            </SelectItem>
-                          ))}
+                        <SelectItem value={CAT_NONE}>Не выбрано</SelectItem>
+                        {limitCategories.map((c) => (
+                          <SelectItem key={c.id} value={String(c.id)}>
+                            {c.name}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
                 )}
-              </div>
-              <div className="space-y-1.5">
-                <Label>Семья (опционально)</Label>
-                <Select
-                  value={form.familyId}
-                  onValueChange={(v) =>
-                    setForm((p) => ({ ...p, familyId: v }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Личный лимит" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NONE_FAMILY}>Личный</SelectItem>
-                    {families.map((f) => (
-                      <SelectItem key={f.id} value={String(f.id)}>
-                        {f.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
               </div>
               <label className="flex items-center gap-2 cursor-pointer">
                 <Checkbox
@@ -349,63 +442,145 @@ export default function LimitsPage() {
             Нет лимитов
           </p>
         ) : (
-          limits.map((l) => (
-            <Card key={l.id} className="group">
-              <CardContent className="p-4 space-y-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <Gauge className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <span className="text-sm font-medium truncate">
-                        {l.name}
+          limits.map((l) => {
+            const limitAmount = toNum(l.amount);
+            const used = l.usedAmount ?? 0;
+            const remaining = l.remainingAmount ?? Math.max(limitAmount - used, 0);
+            const percent = l.percentUsed ?? 0;
+            const exceeded = l.isExceeded ?? false;
+            const exceededBy = l.exceededBy ?? 0;
+            const barWidth = Math.min(percent, 100);
+
+            return (
+              <Card
+                key={l.id}
+                className={cn(
+                  "group",
+                  exceeded && "border-destructive/40 bg-destructive/5",
+                )}
+              >
+                <CardContent className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <Gauge className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <span className="text-sm font-medium truncate">
+                          {l.name}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                        <Badge
+                          variant={
+                            l.limitScope === "PERSONAL" ? "outline" : "default"
+                          }
+                          className="text-[10px]"
+                        >
+                          {l.limitScope === "PERSONAL" ? "Личный" : "Семейный"}
+                        </Badge>
+                        <Badge variant="secondary" className="text-[10px]">
+                          {l.scope === "CATEGORY"
+                            ? l.category?.name || "По категории"
+                            : "Общий"}
+                        </Badge>
+                        <Badge variant="secondary" className="text-[10px]">
+                          {l.period === "WEEKLY" ? "Неделя" : "Месяц"}
+                        </Badge>
+                        {l.limitScope === "FAMILY" &&
+                          (l.familyName || l.family) && (
+                            <Badge variant="secondary" className="text-[10px]">
+                              {l.familyName ?? l.family?.name}
+                            </Badge>
+                          )}
+                        {l.isBlocking ? (
+                          <Badge variant="destructive" className="text-[10px]">
+                            <ShieldAlert className="h-3 w-3 mr-0.5" />
+                            Блокирующий
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px]">
+                            Предупреждающий
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                    {l.canManage && (
+                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => openEdit(l)}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => handleDelete(l.id)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-1 text-sm">
+                    <div className="flex justify-between gap-2">
+                      <span className="text-muted-foreground">Лимит</span>
+                      <span className="font-mono-nums font-medium">
+                        {fmt(limitAmount)} ₽
                       </span>
                     </div>
-                    <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                      <Badge variant="secondary" className="text-[10px]">
-                        {l.scope === "CATEGORY"
-                          ? l.category?.name || "Категория"
-                          : "Общий"}
-                      </Badge>
-                      <Badge variant="secondary" className="text-[10px]">
-                        {l.period === "WEEKLY" ? "Неделя" : "Месяц"}
-                      </Badge>
-                      {l.isBlocking && (
-                        <Badge variant="destructive" className="text-[10px]">
-                          <ShieldAlert className="h-3 w-3 mr-0.5" /> Блокир.
-                        </Badge>
-                      )}
-                      {l.familyId && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          Семья
-                        </Badge>
-                      )}
+                    <div className="flex justify-between gap-2">
+                      <span className="text-muted-foreground">Потрачено</span>
+                      <span className="font-mono-nums font-medium">
+                        {fmt(used)} ₽
+                      </span>
+                    </div>
+                    {exceeded ? (
+                      <div className="flex justify-between gap-2 text-destructive">
+                        <span className="flex items-center gap-1">
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          Превышено на
+                        </span>
+                        <span className="font-mono-nums font-semibold">
+                          {fmt(exceededBy)} ₽
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="flex justify-between gap-2">
+                        <span className="text-muted-foreground">Осталось</span>
+                        <span className="font-mono-nums font-medium text-income">
+                          {fmt(remaining)} ₽
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex justify-between gap-2 text-xs text-muted-foreground">
+                      <span>Использовано</span>
+                      <span
+                        className={cn(
+                          "font-mono-nums font-medium",
+                          exceeded && "text-destructive",
+                        )}
+                      >
+                        {Math.round(percent)}%
+                      </span>
                     </div>
                   </div>
-                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={() => openEdit(l)}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={() => handleDelete(l.id)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+
+                  <div className="budget-bar">
+                    <div
+                      className={
+                        exceeded ? "budget-bar-fill-alert" : "budget-bar-fill"
+                      }
+                      style={{ width: `${barWidth}%` }}
+                    />
                   </div>
-                </div>
-                <p className="font-mono-nums text-lg font-semibold">
-                  {fmt(toNum(l.amount))} ₽
-                </p>
-              </CardContent>
-            </Card>
-          ))
+                </CardContent>
+              </Card>
+            );
+          })
         )}
       </div>
     </div>

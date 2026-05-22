@@ -2,6 +2,12 @@ import { Router } from "express";
 import { prisma } from "../prisma";
 import { authMiddleware, AuthRequest } from "../middleware/auth";
 import { OperationType } from "../../generated/prisma/enums";
+import {
+  canManageCategory,
+  categoryScope,
+  getUserFamilyIds,
+  isFamilyMember,
+} from "../lib/familyAccess";
 
 export const categoriesRouter = Router();
 
@@ -22,9 +28,71 @@ function parseId(value: unknown): number | null {
   return n;
 }
 
+type CategoryRow = {
+  id: number;
+  name: string;
+  type: OperationType;
+  color: string | null;
+  icon: string | null;
+  userId: number;
+  familyId: number | null;
+  isDefault: boolean;
+  createdAt: Date;
+  family?: { id: number; name: string } | null;
+};
+
+async function serializeCategory(
+  category: CategoryRow,
+  userId: number,
+): Promise<{
+  id: number;
+  name: string;
+  type: OperationType;
+  color: string | null;
+  icon: string | null;
+  userId: number;
+  familyId: number | null;
+  familyName: string | null;
+  isDefault: boolean;
+  createdAt: Date;
+  scope: "PERSONAL" | "FAMILY";
+  canManage: boolean;
+}> {
+  const scope = categoryScope(category.familyId);
+  return {
+    id: category.id,
+    name: category.name,
+    type: category.type,
+    color: category.color,
+    icon: category.icon,
+    userId: category.userId,
+    familyId: category.familyId,
+    familyName: category.family?.name ?? null,
+    isDefault: category.isDefault,
+    createdAt: category.createdAt,
+    scope,
+    canManage: await canManageCategory(category, userId),
+  };
+}
+
+async function findVisibleCategory(id: number, userId: number) {
+  const familyIds = await getUserFamilyIds(userId);
+  return prisma.category.findFirst({
+    where: {
+      id,
+      OR: [
+        { userId, familyId: null },
+        ...(familyIds.length ? [{ familyId: { in: familyIds } }] : []),
+      ],
+    },
+    include: { family: { select: { id: true, name: true } } },
+  });
+}
+
 categoriesRouter.post("/", async (req: AuthRequest, res) => {
   try {
     const { name, type, color, icon, familyId } = req.body;
+    const userId = req.user!.id;
 
     if (!isNonEmptyString(name)) {
       return res.status(400).json({ message: "name is required" });
@@ -37,14 +105,38 @@ categoriesRouter.post("/", async (req: AuthRequest, res) => {
         .json({ message: "type must be INCOME or EXPENSE" });
     }
 
-    const category = await prisma.category.findFirst({
-      where: { userId: req.user!.id, name },
-    });
+    const parsedFamilyId =
+      familyId === undefined || familyId === null || familyId === ""
+        ? null
+        : parseId(familyId);
 
-    if (category) {
-      return res.status(409).json({
-        message: "Category with this name already exists",
+    if (familyId !== undefined && familyId !== null && familyId !== "" && !parsedFamilyId) {
+      return res.status(400).json({ message: "Invalid familyId" });
+    }
+
+    if (parsedFamilyId) {
+      const member = await isFamilyMember(parsedFamilyId, userId);
+      if (!member) {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+
+      const duplicate = await prisma.category.findFirst({
+        where: { familyId: parsedFamilyId, name },
       });
+      if (duplicate) {
+        return res.status(409).json({
+          message: "Category with this name already exists in this family",
+        });
+      }
+    } else {
+      const duplicate = await prisma.category.findFirst({
+        where: { userId, familyId: null, name },
+      });
+      if (duplicate) {
+        return res.status(409).json({
+          message: "Category with this name already exists",
+        });
+      }
     }
 
     const created = await prisma.category.create({
@@ -53,13 +145,14 @@ categoriesRouter.post("/", async (req: AuthRequest, res) => {
         type: operationType,
         color: typeof color === "string" ? color : null,
         icon: typeof icon === "string" ? icon : null,
-        userId: req.user!.id,
-        familyId: familyId ? Number(familyId) : null,
-        isDefault: !familyId,
+        userId,
+        familyId: parsedFamilyId,
+        isDefault: parsedFamilyId === null,
       },
+      include: { family: { select: { id: true, name: true } } },
     });
 
-    return res.status(201).json(created);
+    return res.status(201).json(await serializeCategory(created, userId));
   } catch (e: unknown) {
     if (typeof e === "object" && e !== null && "code" in e) {
       const code = (e as { code?: string }).code;
@@ -76,51 +169,54 @@ categoriesRouter.post("/", async (req: AuthRequest, res) => {
 
 categoriesRouter.get("/", async (req: AuthRequest, res) => {
   const { type } = req.query;
-
+  const userId = req.user!.id;
   const operationType = parseOperationType(type);
+  const familyIds = await getUserFamilyIds(userId);
 
   const categories = await prisma.category.findMany({
     where: {
-      userId: req.user!.id,
+      OR: [
+        { userId, familyId: null },
+        ...(familyIds.length ? [{ familyId: { in: familyIds } }] : []),
+      ],
       ...(operationType ? { type: operationType } : {}),
     },
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ familyId: "asc" }, { createdAt: "desc" }],
+    include: { family: { select: { id: true, name: true } } },
   });
 
-  return res.json(categories);
+  const result = await Promise.all(
+    categories.map((c) => serializeCategory(c, userId)),
+  );
+
+  return res.json(result);
 });
 
 categoriesRouter.get("/:id", async (req: AuthRequest, res) => {
   const id = parseId(req.params.id);
   if (!id) return res.status(400).json({ message: "Invalid id" });
 
-  const category = await prisma.category.findFirst({
-    where: { id, userId: req.user!.id },
-  });
-
+  const category = await findVisibleCategory(id, req.user!.id);
   if (!category) return res.status(404).json({ message: "Not found" });
 
-  return res.json(category);
+  return res.json(await serializeCategory(category, req.user!.id));
 });
 
 categoriesRouter.put("/:id", async (req: AuthRequest, res) => {
   const id = parseId(req.params.id);
   if (!id) return res.status(400).json({ message: "Invalid id" });
 
-  const existing = await prisma.category.findFirst({
-    where: { id, userId: req.user!.id },
-  });
-
+  const existing = await findVisibleCategory(id, req.user!.id);
   if (!existing) return res.status(404).json({ message: "Not found" });
 
-  const { name, type, color, icon, familyId } = req.body;
+  if (!(await canManageCategory(existing, req.user!.id))) {
+    return res.status(403).json({ message: "Forbidden" });
+  }
+
+  const { name, type, color, icon } = req.body;
 
   const hasAnyUpdate =
-    name !== undefined ||
-    type !== undefined ||
-    color !== undefined ||
-    icon !== undefined ||
-    familyId !== undefined;
+    name !== undefined || type !== undefined || color !== undefined || icon !== undefined;
 
   if (!hasAnyUpdate) {
     return res.status(400).json({ message: "Nothing to update" });
@@ -137,22 +233,34 @@ categoriesRouter.put("/:id", async (req: AuthRequest, res) => {
       .json({ message: "type must be INCOME or EXPENSE" });
   }
 
-  // If name changes, ensure uniqueness for this user.
-  if (name !== undefined && name !== existing.name) {
-    const duplicated = await prisma.category.findFirst({
-      where: { userId: req.user!.id, name },
-    });
-    if (duplicated) {
-      return res.status(409).json({
-        message: "Category with this name already exists",
+  const nextName = name ?? existing.name;
+
+  if (nextName !== existing.name) {
+    if (existing.familyId === null) {
+      const duplicated = await prisma.category.findFirst({
+        where: { userId: req.user!.id, familyId: null, name: nextName },
       });
+      if (duplicated && duplicated.id !== existing.id) {
+        return res.status(409).json({
+          message: "Category with this name already exists",
+        });
+      }
+    } else {
+      const duplicated = await prisma.category.findFirst({
+        where: { familyId: existing.familyId, name: nextName },
+      });
+      if (duplicated && duplicated.id !== existing.id) {
+        return res.status(409).json({
+          message: "Category with this name already exists in this family",
+        });
+      }
     }
   }
 
   const updated = await prisma.category.update({
     where: { id: existing.id },
     data: {
-      name: name ?? existing.name,
+      name: nextName,
       type: operationType ?? existing.type,
       color:
         color === undefined
@@ -166,26 +274,97 @@ categoriesRouter.put("/:id", async (req: AuthRequest, res) => {
           : typeof icon === "string"
             ? icon
             : null,
-      familyId:
-        familyId === undefined ? existing.familyId : familyId ? Number(familyId) : null,
-      isDefault: familyId === undefined ? existing.isDefault : !familyId,
     },
+    include: { family: { select: { id: true, name: true } } },
   });
 
-  return res.json(updated);
+  return res.json(await serializeCategory(updated, req.user!.id));
 });
 
 categoriesRouter.delete("/:id", async (req: AuthRequest, res) => {
   const id = parseId(req.params.id);
   if (!id) return res.status(400).json({ message: "Invalid id" });
 
-  const deleted = await prisma.category.deleteMany({
-    where: { id, userId: req.user!.id },
-  });
+  const existing = await findVisibleCategory(id, req.user!.id);
+  if (!existing) return res.status(404).json({ message: "Not found" });
 
-  if (deleted.count === 0) {
-    return res.status(404).json({ message: "Not found" });
+  if (!(await canManageCategory(existing, req.user!.id))) {
+    return res.status(403).json({ message: "Forbidden" });
   }
 
+  await prisma.category.delete({ where: { id: existing.id } });
   return res.status(204).send();
 });
+
+/** Экспорт для operations / limits */
+export async function resolveCategoryForOperation(
+  categoryId: number,
+  userId: number,
+  operationFamilyId: number | null,
+) {
+  const familyIds = await getUserFamilyIds(userId);
+  const category = await prisma.category.findFirst({
+    where: {
+      id: categoryId,
+      OR: [
+        { userId, familyId: null },
+        ...(familyIds.length ? [{ familyId: { in: familyIds } }] : []),
+      ],
+    },
+    select: { id: true, familyId: true, type: true },
+  });
+
+  if (!category) return { ok: false as const, status: 400, message: "Invalid categoryId" };
+
+  if (operationFamilyId !== null) {
+    if (category.familyId !== operationFamilyId) {
+      return {
+        ok: false as const,
+        status: 400,
+        message: "Category does not belong to this family",
+      };
+    }
+  } else if (category.familyId !== null) {
+    return {
+      ok: false as const,
+      status: 400,
+      message: "Category is not personal",
+    };
+  }
+
+  return { ok: true as const, category };
+}
+
+export async function resolveCategoryForLimit(
+  categoryId: number,
+  userId: number,
+  limitFamilyId: number | null,
+) {
+  if (limitFamilyId !== null) {
+    const category = await prisma.category.findFirst({
+      where: { id: categoryId, familyId: limitFamilyId },
+      select: { id: true, familyId: true },
+    });
+    if (!category) {
+      return {
+        ok: false as const,
+        status: 404,
+        message: "Category not found",
+      };
+    }
+    return { ok: true as const, category };
+  }
+
+  const category = await prisma.category.findFirst({
+    where: { id: categoryId, userId, familyId: null },
+    select: { id: true, familyId: true },
+  });
+  if (!category) {
+    return {
+      ok: false as const,
+      status: 404,
+      message: "Category not found",
+    };
+  }
+  return { ok: true as const, category };
+}

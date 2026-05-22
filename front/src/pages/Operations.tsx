@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   getOperations,
   createOperation,
@@ -101,6 +101,32 @@ export default function OperationsPage() {
 
   useEffect(loadData, []);
 
+  const isPersonalOperation =
+    !form.familyId || form.familyId === PERSONAL_FAMILY;
+
+  const availableCategories = useMemo(
+    () =>
+      categories.filter((c) => {
+        if (c.type !== form.type) return false;
+        if (isPersonalOperation) return c.scope === "PERSONAL";
+        return (
+          c.scope === "FAMILY" &&
+          String(c.familyId) === String(form.familyId)
+        );
+      }),
+    [categories, form.type, form.familyId, isPersonalOperation],
+  );
+
+  useEffect(() => {
+    if (form.categoryId === NONE_CATEGORY) return;
+    const stillValid = availableCategories.some(
+      (c) => String(c.id) === String(form.categoryId),
+    );
+    if (!stillValid) {
+      setForm((p) => ({ ...p, categoryId: NONE_CATEGORY }));
+    }
+  }, [availableCategories, form.categoryId]);
+
   const handleDeleteOperation = async (id: string | number) => {
     if (!confirm("Удалить операцию?")) return;
     try {
@@ -174,17 +200,17 @@ export default function OperationsPage() {
       loadData();
     } catch (err: unknown) {
       if (err instanceof ApiError && err.status === 409) {
-        const base = err.message || "Лимит не позволяет выполнить операцию";
-        setFormWarning(
-          base +
-            (form.force ? "" : " Отметьте «Подтвердить несмотря на лимит», если хотите принудительно провести операцию.") +
-            limitDetailFromData(err.data),
+        const base =
+          err.message || "Превышен бюджетный лимит. Операция не сохранена.";
+        const detail = limitDetailFromData(err.data);
+        setFormError(
+          `Превышение лимита: ${base}${detail ? detail : ""}`,
         );
-        if (form.force) {
-          setFormError(
-            "Принудительное проведение отклонено сервером. Проверьте настройки лимитов.",
-          );
-        }
+        setFormWarning(
+          form.force
+            ? "Принудительное проведение отклонено. Проверьте лимиты или обратитесь к владельцу семьи."
+            : "Отметьте «Подтвердить несмотря на лимит (force)», если владелец семьи разрешил превысить блокирующий лимит.",
+        );
       } else {
         setFormError(getErrorMessage(err, "Ошибка создания операции"));
       }
@@ -273,11 +299,7 @@ export default function OperationsPage() {
                   <Select
                     value={form.type}
                     onValueChange={(v: "INCOME" | "EXPENSE") =>
-                      setForm((p) => ({
-                        ...p,
-                        type: v,
-                        categoryId: NONE_CATEGORY,
-                      }))
+                      setForm((p) => ({ ...p, type: v, categoryId: NONE_CATEGORY }))
                     }
                   >
                     <SelectTrigger>
@@ -329,13 +351,14 @@ export default function OperationsPage() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value={NONE_CATEGORY}>Не выбрана</SelectItem>
-                      {categories
-                        .filter((c) => c.type === form.type)
-                        .map((c) => (
-                          <SelectItem key={c.id} value={String(c.id)}>
-                            {c.name}
-                          </SelectItem>
-                        ))}
+                      {availableCategories.map((c) => (
+                        <SelectItem key={c.id} value={String(c.id)}>
+                          {c.name}
+                          {c.scope === "FAMILY" && c.familyName
+                            ? ` (${c.familyName})`
+                            : ""}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -351,7 +374,11 @@ export default function OperationsPage() {
                         : String(form.familyId)
                     }
                     onValueChange={(v) =>
-                      setForm((p) => ({ ...p, familyId: v }))
+                      setForm((p) => ({
+                        ...p,
+                        familyId: v,
+                        categoryId: NONE_CATEGORY,
+                      }))
                     }
                   >
                     <SelectTrigger>

@@ -5,6 +5,9 @@ const express_1 = require("express");
 const prisma_1 = require("../prisma");
 const auth_1 = require("../middleware/auth");
 const client_1 = require("../../generated/prisma/client");
+const categories_1 = require("./categories");
+const familyAccess_1 = require("../lib/familyAccess");
+const limitUsage_1 = require("../lib/limitUsage");
 exports.limitsRouter = (0, express_1.Router)();
 exports.limitsRouter.use(auth_1.authMiddleware);
 function isNonEmptyString(value) {
@@ -48,19 +51,37 @@ function parseAmount(value) {
     }
     return null;
 }
-async function isFamilyOwner(familyId, userId) {
-    const member = await prisma_1.prisma.familyMember.findFirst({
-        where: { familyId, userId },
-        select: { role: true },
-    });
-    return member?.role === "OWNER";
-}
 async function hasFamilyAccess(familyId, userId) {
     const member = await prisma_1.prisma.familyMember.findFirst({
         where: { familyId, userId },
         select: { id: true },
     });
     return !!member;
+}
+async function serializeLimit(limit, userId, options) {
+    const scope = (0, familyAccess_1.limitScope)(limit.userId, limit.familyId);
+    const base = {
+        id: limit.id,
+        name: limit.name,
+        amount: (0, limitUsage_1.decimalToNumber)(limit.amount),
+        period: limit.period,
+        scope: limit.scope,
+        isBlocking: limit.isBlocking,
+        createdAt: limit.createdAt,
+        categoryId: limit.categoryId,
+        userId: limit.userId,
+        familyId: limit.familyId,
+        category: limit.category ?? null,
+        family: limit.family ?? null,
+        limitScope: scope,
+        familyName: limit.family?.name ?? null,
+        canManage: await (0, familyAccess_1.canManageBudgetLimit)(limit, userId),
+    };
+    if (options?.includeUsage === false) {
+        return base;
+    }
+    const usage = await (0, limitUsage_1.calculateLimitUsage)(limit);
+    return { ...base, ...usage };
 }
 exports.limitsRouter.post("/", async (req, res) => {
     const { name, amount, period, scope, categoryId, familyId, isBlocking } = req.body;
@@ -98,7 +119,7 @@ exports.limitsRouter.post("/", async (req, res) => {
         return res.status(400).json({ message: "limit must belong to user or family" });
     }
     if (belongsToFamily) {
-        const ok = await isFamilyOwner(belongsToFamily, req.user.id);
+        const ok = await (0, familyAccess_1.isFamilyOwner)(belongsToFamily, req.user.id);
         if (!ok)
             return res.status(403).json({ message: "Forbidden" });
     }
@@ -108,23 +129,10 @@ exports.limitsRouter.post("/", async (req, res) => {
     if (parsedScope === "TOTAL" && parsedCategoryId) {
         return res.status(400).json({ message: "categoryId must be null for TOTAL scope" });
     }
-    // Validate category ownership and family compatibility if category is used.
     if (parsedCategoryId) {
-        const category = await prisma_1.prisma.category.findFirst({
-            where: { id: parsedCategoryId, userId: req.user.id },
-            select: { id: true, familyId: true },
-        });
-        if (!category)
-            return res.status(404).json({ message: "Category not found" });
-        if (belongsToFamily) {
-            if (category.familyId !== belongsToFamily) {
-                return res.status(400).json({ message: "Category must belong to the same family" });
-            }
-        }
-        else {
-            if (category.familyId !== null) {
-                return res.status(400).json({ message: "Personal limit requires personal category" });
-            }
+        const resolved = await (0, categories_1.resolveCategoryForLimit)(parsedCategoryId, req.user.id, belongsToFamily);
+        if (!resolved.ok) {
+            return res.status(resolved.status).json({ message: resolved.message });
         }
     }
     const created = await prisma_1.prisma.budgetLimit.create({
@@ -138,8 +146,12 @@ exports.limitsRouter.post("/", async (req, res) => {
             userId: belongsToUser,
             familyId: belongsToFamily,
         },
+        include: {
+            category: { select: { id: true, name: true } },
+            family: { select: { id: true, name: true } },
+        },
     });
-    return res.status(201).json(created);
+    return res.status(201).json(await serializeLimit(created, req.user.id));
 });
 exports.limitsRouter.get("/", async (req, res) => {
     const memberships = await prisma_1.prisma.familyMember.findMany({
@@ -160,7 +172,8 @@ exports.limitsRouter.get("/", async (req, res) => {
             family: { select: { id: true, name: true } },
         },
     });
-    return res.json(limits);
+    const result = await Promise.all(limits.map((l) => serializeLimit(l, req.user.id, { includeUsage: true })));
+    return res.json(result);
 });
 exports.limitsRouter.get("/:id", async (req, res) => {
     const id = parseId(req.params.id);
@@ -187,7 +200,7 @@ exports.limitsRouter.get("/:id", async (req, res) => {
     else {
         return res.status(403).json({ message: "Forbidden" });
     }
-    return res.json(limit);
+    return res.json(await serializeLimit(limit, req.user.id, { includeUsage: true }));
 });
 exports.limitsRouter.put("/:id", async (req, res) => {
     const id = parseId(req.params.id);
@@ -202,7 +215,7 @@ exports.limitsRouter.put("/:id", async (req, res) => {
             return res.status(403).json({ message: "Forbidden" });
     }
     else if (existing.familyId) {
-        const ok = await isFamilyOwner(existing.familyId, req.user.id);
+        const ok = await (0, familyAccess_1.isFamilyOwner)(existing.familyId, req.user.id);
         if (!ok)
             return res.status(403).json({ message: "Forbidden" });
     }
@@ -236,23 +249,10 @@ exports.limitsRouter.put("/:id", async (req, res) => {
     if (nextScope === "TOTAL" && nextCategoryId) {
         return res.status(400).json({ message: "categoryId must be null for TOTAL scope" });
     }
-    // Validate category if used
     if (nextCategoryId) {
-        const category = await prisma_1.prisma.category.findFirst({
-            where: { id: nextCategoryId, userId: req.user.id },
-            select: { familyId: true },
-        });
-        if (!category)
-            return res.status(404).json({ message: "Category not found" });
-        if (existing.familyId) {
-            if (category.familyId !== existing.familyId) {
-                return res.status(400).json({ message: "Category must belong to the same family" });
-            }
-        }
-        else {
-            if (category.familyId !== null) {
-                return res.status(400).json({ message: "Personal limit requires personal category" });
-            }
+        const resolved = await (0, categories_1.resolveCategoryForLimit)(nextCategoryId, req.user.id, existing.familyId);
+        if (!resolved.ok) {
+            return res.status(resolved.status).json({ message: resolved.message });
         }
     }
     const updated = await prisma_1.prisma.budgetLimit.update({
@@ -265,8 +265,12 @@ exports.limitsRouter.put("/:id", async (req, res) => {
             categoryId: nextCategoryId,
             isBlocking: isBlocking === undefined ? existing.isBlocking : !!isBlocking,
         },
+        include: {
+            category: { select: { id: true, name: true } },
+            family: { select: { id: true, name: true } },
+        },
     });
-    return res.json(updated);
+    return res.json(await serializeLimit(updated, req.user.id));
 });
 exports.limitsRouter.delete("/:id", async (req, res) => {
     const id = parseId(req.params.id);
@@ -280,7 +284,7 @@ exports.limitsRouter.delete("/:id", async (req, res) => {
             return res.status(403).json({ message: "Forbidden" });
     }
     else if (existing.familyId) {
-        const ok = await isFamilyOwner(existing.familyId, req.user.id);
+        const ok = await (0, familyAccess_1.isFamilyOwner)(existing.familyId, req.user.id);
         if (!ok)
             return res.status(403).json({ message: "Forbidden" });
     }

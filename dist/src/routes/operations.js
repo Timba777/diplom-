@@ -5,6 +5,7 @@ const express_1 = require("express");
 const prisma_1 = require("../prisma");
 const auth_1 = require("../middleware/auth");
 const client_1 = require("../../generated/prisma/client");
+const categories_1 = require("./categories");
 exports.operationsRouter = (0, express_1.Router)();
 exports.operationsRouter.use(auth_1.authMiddleware);
 function parseAmount(value) {
@@ -69,37 +70,8 @@ exports.operationsRouter.post("/", async (req, res) => {
     if (Number.isNaN(operationDate.getTime())) {
         return res.status(400).json({ message: "Invalid date" });
     }
-    if (categoryId !== undefined && categoryId !== null) {
-        const parsedCategoryId = Number(categoryId);
-        if (!Number.isInteger(parsedCategoryId) || parsedCategoryId <= 0) {
-            return res.status(400).json({ message: "Invalid categoryId" });
-        }
-        const ownedCategory = await prisma_1.prisma.category.findFirst({
-            where: { id: parsedCategoryId, userId: req.user.id },
-            select: { id: true, familyId: true },
-        });
-        if (!ownedCategory) {
-            return res.status(400).json({ message: "Invalid categoryId" });
-        }
-        if (familyId !== undefined && familyId !== null) {
-            const parsedFamilyId = Number(familyId);
-            if (!Number.isInteger(parsedFamilyId) || parsedFamilyId <= 0) {
-                return res.status(400).json({ message: "Invalid familyId" });
-            }
-            if (ownedCategory.familyId !== parsedFamilyId) {
-                return res
-                    .status(400)
-                    .json({ message: "Category does not belong to this family" });
-            }
-        }
-        else {
-            if (ownedCategory.familyId !== null) {
-                return res.status(400).json({ message: "Category is not personal" });
-            }
-        }
-    }
     let parsedFamilyId = null;
-    if (familyId !== undefined && familyId !== null) {
+    if (familyId !== undefined && familyId !== null && familyId !== "") {
         parsedFamilyId = Number(familyId);
         if (!Number.isInteger(parsedFamilyId) || parsedFamilyId <= 0) {
             return res.status(400).json({ message: "Invalid familyId" });
@@ -109,33 +81,46 @@ exports.operationsRouter.post("/", async (req, res) => {
             return res.status(403).json({ message: "Forbidden" });
         }
     }
+    let parsedCategoryId = null;
+    if (categoryId !== undefined && categoryId !== null && categoryId !== "") {
+        parsedCategoryId = Number(categoryId);
+        if (!Number.isInteger(parsedCategoryId) || parsedCategoryId <= 0) {
+            return res.status(400).json({ message: "Invalid categoryId" });
+        }
+        const resolved = await (0, categories_1.resolveCategoryForOperation)(parsedCategoryId, req.user.id, parsedFamilyId);
+        if (!resolved.ok) {
+            return res.status(resolved.status).json({ message: resolved.message });
+        }
+    }
     const unplannedPurchase = type === "EXPENSE" && !planned;
     // Check limits only for EXPENSE
     if (type === "EXPENSE") {
+        const limitsWhere = parsedFamilyId
+            ? { familyId: parsedFamilyId }
+            : { userId: req.user.id, familyId: null };
         const limits = await prisma_1.prisma.budgetLimit.findMany({
-            where: {
-                OR: [
-                    { userId: req.user.id },
-                    ...(parsedFamilyId ? [{ familyId: parsedFamilyId }] : []),
-                ],
-            },
+            where: limitsWhere,
             orderBy: { createdAt: "desc" },
         });
         const exceeded = [];
         for (const limit of limits) {
+            if (limit.scope === "CATEGORY") {
+                if (!parsedCategoryId || limit.categoryId !== parsedCategoryId) {
+                    continue;
+                }
+            }
             const periodStart = limit.period === "WEEKLY" ? startOfWeek(operationDate) : startOfMonth(operationDate);
             const periodEnd = limit.period === "WEEKLY" ? addDays(periodStart, 7) : addMonths(periodStart, 1);
             const where = {
                 type: "EXPENSE",
                 date: { gte: periodStart, lt: periodEnd },
             };
-            // Personal limits apply to user's expenses.
-            if (limit.userId) {
-                where.userId = limit.userId;
+            if (parsedFamilyId) {
+                where.familyId = parsedFamilyId;
             }
-            // Family limits apply only inside that family.
-            if (limit.familyId) {
-                where.familyId = limit.familyId;
+            else {
+                where.userId = req.user.id;
+                where.familyId = null;
             }
             if (limit.scope === "CATEGORY") {
                 where.categoryId = limit.categoryId;
@@ -185,7 +170,7 @@ exports.operationsRouter.post("/", async (req, res) => {
                 description,
                 date: operationDate,
                 planned: !!planned,
-                categoryId: categoryId ?? null,
+                categoryId: parsedCategoryId,
                 familyId: parsedFamilyId,
                 userId: req.user.id,
             },
@@ -217,7 +202,7 @@ exports.operationsRouter.post("/", async (req, res) => {
             description,
             date: operationDate,
             planned: !!planned,
-            categoryId: categoryId ?? null,
+            categoryId: parsedCategoryId,
             familyId: parsedFamilyId,
             userId: req.user.id,
         },
